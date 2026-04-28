@@ -10,14 +10,17 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-
 import httpx
 
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = "mongodb://localhost:27017"
+mongo_url = os.getenv("MONGO_URL")
+
+if not mongo_url:
+    raise Exception("MONGO_URL not found in environment variables")
+
 client = AsyncIOMotorClient(mongo_url)
 db = client["videodb"]
 
