@@ -1,0 +1,42 @@
+{
+  "summary": "Re-verified DownloadModal private-content branch fix (iteration 3, frontend only). Private-content flow (T1-T4) now PASSES after an expo restart (stale metro bundle initially served old UI; fresh bundle renders the new branch). T5 (malformed/unreachable URL) FAILS: the network-unreachable case is still classified as 'private' in the frontend, so it shows 'Cannot Download' with no Retry button instead of 'Download failed' + Retry. Root cause is in /app/frontend/src/store/downloadStore.tsx, not in DownloadModal.tsx.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Submit unreachable URL (e.g. https://noexist.invalid.tld/x.mp4) on Download tab",
+        "issue": "Frontend classifies backend's network-unreachable response (success=false, is_public=false, error='Could not reach the link') as errorKind='private'. Modal renders 'Cannot Download' / 'This content is private or not supported' / Close, with NO Retry. Spec requires 'Download failed' + Retry for this path.",
+        "affected_testIDs": ["download-stage-error", "download-retry", "download-cancel"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_3.json"
+  ],
+  "action_items": [
+    "In /app/frontend/src/store/downloadStore.tsx around line 185, split the single 'not public' branch into two: if validation.success === false → errorKind='network' (retry-able, renders 'Download failed' + Retry). Only when validation.success === true AND validation.is_public === false → errorKind='private' (current Cannot Download branch). This keeps T1-T4 passing while fixing T5.",
+    "Consider also mapping backend error strings ('Could not reach the link', 'Request timed out — please try again', 'Something went wrong') to errorKind='network' so the user sees a retry option.",
+    "After code edit, restart expo (sudo supervisorctl restart expo) — stale metro cache caused iteration-3 first run to show the old UI even though source already contained the fix. Recommend a hard refresh / cache-bust during self-test."
+  ],
+  "critical_code_review_comments": [
+    "downloadStore.tsx conflates two distinct backend outcomes (network failure vs. truly-private content) into one 'private' errorKind. This directly breaks the DownloadModal branch contract added in iteration 2.",
+    "DownloadModal.tsx implementation of the private branch is correct and matches spec (title 'Cannot Download', subtitle 'This content is private or not supported', no Retry, Cancel text 'Close'). No change needed there.",
+    "Expo/metro bundle is cached aggressively in CI mode; any UI-layer bug verification should first force-restart expo to avoid false negatives."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "not_tested",
+    "frontend": "80% (4/5 spec cases)"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "After main agent updates downloadStore.tsx to split errorKind, re-run the same 5 spec cases with viewport 390x844 against the public preview URL. Make sure to restart expo before verification (metro caches bundles). Inner_text of [data-testid='download-stage-error'] is the authoritative assertion source; screenshots can lag behind state. Use a cache-busting query param when navigating to the preview URL.",
+  "rca_of_issue": "Reproduction: 1) Open preview URL on 390x844. 2) Paste 'https://noexist.invalid.tld/x.mp4' into download-url-input. 3) Tap download-submit. Expected: modal shows title 'Download failed' with download-retry visible and download-cancel text 'Cancel'. Actual: modal shows 'Cannot Download' / 'This content is private or not supported' / 'Close', download-retry count = 0. Root cause: Backend /api/download/validate returns ValidateResponse(success=False, is_public=False, error='Could not reach the link') for httpx.RequestError (server.py lines 204-209). Frontend gate `if (!validation?.success || !validation?.is_public)` in downloadStore.tsx:185 treats any is_public=false (including success=false) as errorKind='private'. DownloadModal.tsx then correctly renders the 'private' branch per iteration-2 fix, which is why Retry disappears. Mitigation: Change downloadStore.tsx gate so errorKind='private' only when validation.success === true && validation.is_public === false; otherwise errorKind='network' (retry-able)."
+}

@@ -1,0 +1,51 @@
+{
+  "summary": "Backend: 8/8 pytest cases pass for new /api/download/validate + save/list/delete endpoints. Frontend: all tabs render correctly, zero platform-name leaks, submit button gating works, Profile shows Social Pro Coming Soon with exactly 2 stats (Saved, Storage) and no 'Platforms' stat, Gallery empty state OK. One HIGH-priority UI bug found: DownloadModal does not differentiate errorKind='private' — always shows 'Download failed' title and a Retry button, violating spec (should show 'Cannot Download' title and hide Retry for private content).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "DownloadModal.tsx (error stage)",
+        "issue": "For errorKind='private' (is_public=false from validate), modal still shows title 'Download failed' and renders the Retry button. Spec requires title 'Cannot Download', subtitle 'This content is private or not supported', and NO Retry button — only Cancel/Close. Screenshot confirms: 'Download failed' + 'Private or restricted content' + visible Retry. Fix: branch on state.errorKind === 'private' to swap title/subtitle and hide the GradientButton Retry (keep Cancel). The store already sets errorKind correctly.",
+        "testID": "download-stage-error / download-retry",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "app/(tabs)/index.tsx",
+        "issue": "Console warnings (non-blocking): TouchableWithoutFeedback deprecated (use Pressable); props.pointerEvents deprecated (use style.pointerEvents); shadow* deprecated (use boxShadow). Also, expo doctor shows many expo-* packages out of the expected Expo SDK version range (expo-file-system, expo-media-library, expo-linear-gradient, etc.). Not blocking functionality but should be aligned."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_downloader_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix DownloadModal.tsx: when state.errorKind === 'private', render title 'Cannot Download', subtitle 'This content is private or not supported', and hide the Retry button (keep only Cancel). Other errorKinds ('network', 'download', 'invalid') can keep current 'Download failed' + Retry behavior.",
+    "(Optional) Align expo package versions with installed Expo SDK to silence doctor warnings.",
+    "(Optional) Replace TouchableWithoutFeedback with Pressable in index.tsx to silence deprecation warning."
+  ],
+  "critical_code_review_comments": [
+    "server.py: logger is referenced inside validate_link's except block but defined AFTER app.include_router — logger is still globally set at import end, so it works, but style-wise move logger = logging.getLogger(__name__) above api_router definitions for clarity.",
+    "downloadStore.tsx line 327 saves {...record, file_uri: null} which is fine; backend allows Optional[str] file_uri. Good.",
+    "DownloadModal: state.error message from backend ('Private or restricted content') is displayed directly — the spec copy 'This content is private or not supported' only appears as fallback when validation.error is missing. Consider standardizing the private-kind subtitle copy regardless of backend message."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_downloader_api.py (rewritten for new /api/download/validate endpoint)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "~90% (1 HIGH UI bug on private-content modal copy/Retry)"
+  },
+  "seed_data_creation": "A TEST_mov_bbb.mp4 DownloadItem was created and then deleted by the CRUD test — no residual data.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes DownloadModal for errorKind='private', re-run: (1) pytest /app/backend/tests/test_downloader_api.py, (2) Playwright script that fills https://example.com and clicks submit, then asserts title is 'Cannot Download', subtitle is 'This content is private or not supported', and [data-testid=download-retry] is NOT visible while [data-testid=download-cancel] (or close) is visible. Use viewport 390x844.",
+  "rca_of_issue": "DownloadModal.tsx's error stage is generic: `<Text style={styles.title}>Download failed</Text>` and always renders `<GradientButton label='Retry' ... testID='download-retry' />`. It does not consume state.errorKind, which downloadStore.tsx correctly sets to 'private' when backend returns is_public=false. Fix requires a conditional on errorKind in DownloadModal (state.stage === 'error' block) to render private-specific copy and omit the Retry button. Reproduction: paste https://example.com into Download tab → tap Download → modal shows 'Download failed' + 'Private or restricted content' + Retry (wrong per spec)."
+}
