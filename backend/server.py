@@ -11,6 +11,8 @@ from typing import List, Optional
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import httpx
+import yt_dlp
+
 
 
 ROOT_DIR = Path(__file__).parent
@@ -104,11 +106,31 @@ async def root():
     return {"message": "Downloader API"}
 
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(data: StatusCheckCreate):
-    obj = StatusCheck(**data.dict())
-    await db.status_checks.insert_one(obj.dict())
-    return obj
+@api_router.post("/download/validate", response_model=ValidateResponse)
+async def validate_link(req: ValidateRequest):
+
+    if not is_valid_url(req.url):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    # 🔥 TRY yt-dlp extraction FIRST
+    extracted = await extract_video(req.url)
+
+    if extracted:
+        return ValidateResponse(
+            success=True,
+            is_public=True,
+            video_url=extracted["video_url"],
+            thumbnail=extracted["thumbnail"],
+            title=extracted["title"],
+            size_mb=0.0,
+        )
+
+    # ❌ fallback if extraction fails
+    return ValidateResponse(
+        success=False,
+        is_public=False,
+        error="Unsupported or private link",
+    )
 
 
 @api_router.get("/status", response_model=List[StatusCheck])
