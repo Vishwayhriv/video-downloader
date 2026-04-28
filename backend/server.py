@@ -107,31 +107,38 @@ async def root():
 
 
 @api_router.post("/download/validate", response_model=ValidateResponse)
+@api_router.post("/download/validate", response_model=ValidateResponse)
 async def validate_link(req: ValidateRequest):
 
     if not is_valid_url(req.url):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
-    # 🔥 TRY yt-dlp extraction FIRST
-    extracted = await extract_video(req.url)
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "format": "best",
+        }
 
-    if extracted:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(req.url, download=False)
+
+            return ValidateResponse(
+                success=True,
+                is_public=True,
+                video_url=info.get("url"),
+                thumbnail=info.get("thumbnail"),
+                title=info.get("title"),
+                size_mb=0.0,
+            )
+
+    except Exception as e:
+        print("yt-dlp error:", str(e))
+
         return ValidateResponse(
-            success=True,
-            is_public=True,
-            video_url=extracted["video_url"],
-            thumbnail=extracted["thumbnail"],
-            title=extracted["title"],
-            size_mb=0.0,
+            success=False,
+            is_public=False,
+            error="Could not extract video (private/restricted)",
         )
-
-    # ❌ fallback if extraction fails
-    return ValidateResponse(
-        success=False,
-        is_public=False,
-        error="Unsupported or private link",
-    )
-
 
 @api_router.get("/status", response_model=List[StatusCheck])
 async def get_status_checks():
