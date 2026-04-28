@@ -105,55 +105,9 @@ def _filename_from_url(url: str) -> str:
 async def root():
     return {"message": "Downloader API"}
 
-
-@api_router.post("/download/validate", response_model=ValidateResponse)
 @api_router.post("/download/validate", response_model=ValidateResponse)
 async def validate_link(req: ValidateRequest):
 
-    if not is_valid_url(req.url):
-        raise HTTPException(status_code=400, detail="Invalid URL")
-
-    try:
-        ydl_opts = {
-            "quiet": True,
-            "format": "best",
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(req.url, download=False)
-
-            return ValidateResponse(
-                success=True,
-                is_public=True,
-                video_url=info.get("url"),
-                thumbnail=info.get("thumbnail"),
-                title=info.get("title"),
-                size_mb=0.0,
-            )
-
-    except Exception as e:
-        print("yt-dlp error:", str(e))
-
-        return ValidateResponse(
-            success=False,
-            is_public=False,
-            error="Could not extract video (private/restricted)",
-        )
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    docs = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    return [StatusCheck(**d) for d in docs]
-
-
-@api_router.post("/download/validate", response_model=ValidateResponse)
-async def validate_link(req: ValidateRequest):
-    """Validate that a URL is a publicly accessible direct video file.
-
-    - Rejects non http(s) inputs with 400
-    - Returns is_public=False for 401/403 (auth-required), HTML pages, or unsupported
-    - Returns success=True, is_public=True with video_url + metadata for direct video URLs
-    """
     if not is_valid_url(req.url):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
@@ -165,8 +119,10 @@ async def validate_link(req: ValidateRequest):
             timeout=httpx.Timeout(12.0),
             headers={"User-Agent": "SocialDownloader/1.0"},
         ) as client_http:
+
             resp = None
-            # Try HEAD first (cheap)
+
+            # Try HEAD first
             try:
                 r = await client_http.head(target)
                 if r.status_code < 400 or r.status_code in (401, 403, 404):
@@ -174,7 +130,7 @@ async def validate_link(req: ValidateRequest):
             except Exception:
                 resp = None
 
-            # Fallback to a GET (stream just headers)
+            # Fallback GET
             if resp is None or resp.status_code in (405, 501):
                 async with client_http.stream("GET", target) as gr:
                     status = gr.status_code
@@ -185,68 +141,76 @@ async def validate_link(req: ValidateRequest):
                 headers = dict(resp.headers)
                 final_url = str(resp.url)
 
+            # Basic error checks
             if status in (401, 403):
                 return ValidateResponse(
                     success=False,
                     is_public=False,
                     error="Private or restricted content",
                 )
+
             if status == 404:
                 return ValidateResponse(
                     success=False,
                     is_public=False,
-                    error="Link not found or no longer available",
+                    error="Link not found",
                 )
+
             if status >= 400:
                 return ValidateResponse(
                     success=False,
                     is_public=False,
-                    error="Could not access this link",
+                    error="Could not access link",
                 )
 
-            content_type = headers.get("content-type") or headers.get("Content-Type") or ""
-            content_length_raw = headers.get("content-length") or headers.get("Content-Length") or "0"
-            try:
-                content_length = int(content_length_raw)
-            except ValueError:
-                content_length = 0
+            content_type = headers.get("content-type", "")
 
-            if not _is_video_response(content_type, final_url):
+            # ✅ DIRECT VIDEO → return
+            if _is_video_response(content_type, final_url):
                 return ValidateResponse(
-                    success=False,
-                    is_public=False,
-                    error="Private or restricted content",
+                    success=True,
+                    is_public=True,
+                    video_url=final_url,
+                    thumbnail=GENERIC_THUMB,
+                    title=_filename_from_url(final_url),
+                    size_mb=0.0,
                 )
+
+        # 🔥 NOT DIRECT → use yt-dlp
+        try:
+            ydl_opts = {
+                "quiet": True,
+                "format": "best",
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(target, download=False)
+
+                return ValidateResponse(
+                    success=True,
+                    is_public=True,
+                    video_url=info.get("url"),
+                    thumbnail=info.get("thumbnail"),
+                    title=info.get("title"),
+                    size_mb=0.0,
+                )
+
+        except Exception as e:
+            print("yt-dlp error:", e)
 
             return ValidateResponse(
-                success=True,
-                is_public=True,
-                video_url=final_url,
-                thumbnail=GENERIC_THUMB,
-                title=_filename_from_url(final_url),
-                size_mb=round(content_length / (1024 * 1024), 2) if content_length else 0.0,
+                success=False,
+                is_public=False,
+                error="Could not extract video (private/restricted)",
             )
 
-    except httpx.TimeoutException:
-        return ValidateResponse(
-            success=False,
-            is_public=False,
-            error="Request timed out — please try again",
-        )
-    except httpx.RequestError:
-        return ValidateResponse(
-            success=False,
-            is_public=False,
-            error="Could not reach the link",
-        )
-    except Exception:
-        logger.exception("validate_link unexpected error")
+    except Exception as e:
+        print("Server error:", e)
         return ValidateResponse(
             success=False,
             is_public=False,
             error="Something went wrong",
         )
-
 
 @api_router.post("/download/save", response_model=DownloadItem)
 async def save_download(item: DownloadItem):
